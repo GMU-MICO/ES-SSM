@@ -1,12 +1,10 @@
-# D4RL MuJoCo Code (ES-SSM and Decision Transformer Baselines)
+# D4RL MuJoCo Code for ES-SSM
 
 The offline RL entry point runs the D4RL MuJoCo experiment grid:
 - 9 datasets (HalfCheetah / Hopper / Walker2d × medium / medium-replay / medium-expert)
 - 3 seeds per cell
-- 6 model configurations: Decision Transformer baseline (`dt`), ES-SSM at full
-  capacity `K_max=32` (`esssm_K32`), and four parameter-matched Transformers
-  whose total parameter count tracks the ES-SSM compact deployments at
-  `K ∈ {2, 4, 8, 16}` (`tf_matchK2`, `tf_matchK4`, `tf_matchK8`, `tf_matchK16`).
+- ES-SSM at full capacity `K_max=32` (`esssm_K32`), with embedding dimension 72
+  and three layers, followed by compact models at `K ∈ {2, 4, 8, 16, 32}`.
 
 After training, each ES-SSM(K_max=32) cell is sliced into five independent
 compact checkpoints at K ∈ {2, 4, 8, 16, 32}. Compact inference loads each
@@ -46,7 +44,7 @@ gymnasium >= 1.0
 mujoco >= 3.0
 ```
 
-Atari is not used. CUDA is required for the full sweep but the script also
+Atari is not used. CUDA is recommended for the full sweep but the script also
 runs end-to-end on CPU (slowly).
 
 ## Reproducing the headline grid
@@ -77,7 +75,7 @@ python d4rl_mujoco_RL.py tabulate \
 
 ```bash
 python d4rl_mujoco_RL.py train \
-    --env hopper --dataset medium --model esssm --match-params-to dt --K-max 32 \
+    --env hopper --dataset medium --model esssm --embed-dim 72 --K-max 32 \
     --seed 42 --num-steps 150000 \
     --hdf5-dir ./data --cache-dir ./cache_filters \
     --out-dir ./project/runs/esssm_K32/hopper-medium
@@ -120,9 +118,8 @@ Archived training settings used by this entry point:
 
 | Setting           | Value          |
 |-------------------|----------------|
-| Embedding dim     | 128 (DT) / d=72 (ES-SSM, parameter-matched) |
+| Embedding dim     | 72 |
 | Layers            | 3              |
-| Heads (DT only)   | 1              |
 | Context length    | 20             |
 | Batch size        | 64             |
 | Optimizer         | AdamW(β=(0.9, 0.999), wd=1e-4) |

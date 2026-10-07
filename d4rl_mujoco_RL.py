@@ -48,15 +48,13 @@ D4RL_HDF5_URL_BASE = (
 )
 
 DEFAULT_HYPER = dict(
-    embed_dim=128,
+    embed_dim=72,
     n_layer=3,
-    n_head=1,
     K_ctx=20,
     batch_size=64,
     lr=1e-4,
     weight_decay=1e-4,
     dropout=0.1,
-    activation="relu",
     warmup_steps=10_000,
     num_steps=150_000,
     num_eval_episodes_train=10,
@@ -70,14 +68,7 @@ DEFAULT_HYPER = dict(
     budget_ks=(2, 3, 4, 5, 6, 8, 12, 16, 24, 32),
 )
 
-ALL_TAGS = (
-    "dt",
-    "esssm_K32",
-    "tf_matchK2",
-    "tf_matchK4",
-    "tf_matchK8",
-    "tf_matchK16",
-)
+ALL_TAGS = ("esssm_K32",)
 DEFAULT_SEEDS = (42, 43, 44)
 COMPACT_KS = (2, 4, 8, 16, 32)
 
@@ -243,70 +234,6 @@ class TrajectoryBatcher:
         }
 
 
-class CausalSelfAttention(nn.Module):
-    def __init__(self, d: int, n_head: int, p_drop: float):
-        super().__init__()
-        assert d % n_head == 0
-        self.n_head = n_head
-        self.d_head = d // n_head
-        self.c_attn = nn.Linear(d, 3 * d)
-        self.c_proj = nn.Linear(d, d)
-        self.attn_drop = nn.Dropout(p_drop)
-        self.resid_drop = nn.Dropout(p_drop)
-
-    def forward(self, x, attn_mask):
-        B, T, D = x.shape
-        q, k, v = self.c_attn(x).chunk(3, dim=-1)
-        q = q.view(B, T, self.n_head, self.d_head).transpose(1, 2)
-        k = k.view(B, T, self.n_head, self.d_head).transpose(1, 2)
-        v = v.view(B, T, self.n_head, self.d_head).transpose(1, 2)
-        causal = torch.ones(T, T, device=x.device, dtype=torch.bool).tril()
-        scale = 1.0 / math.sqrt(self.d_head)
-        scores = (q @ k.transpose(-2, -1)) * scale
-        scores = scores.masked_fill(~causal, float("-inf"))
-        if attn_mask is not None:
-            key_mask = attn_mask[:, None, None, :].to(q.dtype)
-            scores = scores.masked_fill(key_mask == 0, float("-inf"))
-        attn = scores.softmax(dim=-1)
-        attn = torch.nan_to_num(attn, nan=0.0)
-        attn = self.attn_drop(attn)
-        y = attn @ v
-        y = y.transpose(1, 2).contiguous().view(B, T, D)
-        return self.resid_drop(self.c_proj(y))
-
-
-class GPTBlock(nn.Module):
-    def __init__(self, d, n_head, p_drop, activation, ffn_mult=4):
-        super().__init__()
-        self.ln1 = nn.LayerNorm(d)
-        self.attn = CausalSelfAttention(d, n_head, p_drop)
-        self.ln2 = nn.LayerNorm(d)
-        act = {"relu": nn.ReLU, "gelu": nn.GELU}[activation]
-        self.mlp = nn.Sequential(
-            nn.Linear(d, ffn_mult * d), act(),
-            nn.Linear(ffn_mult * d, d), nn.Dropout(p_drop),
-        )
-
-    def forward(self, x, attn_mask):
-        x = x + self.attn(self.ln1(x), attn_mask)
-        x = x + self.mlp(self.ln2(x))
-        return x
-
-
-class TransformerBackbone(nn.Module):
-    def __init__(self, d, n_layer, n_head, p_drop, activation="relu"):
-        super().__init__()
-        self.blocks = nn.ModuleList(
-            [GPTBlock(d, n_head, p_drop, activation) for _ in range(n_layer)]
-        )
-        self.ln_f = nn.LayerNorm(d)
-
-    def forward(self, x, attn_mask=None):
-        for b in self.blocks:
-            x = b(x, attn_mask)
-        return self.ln_f(x)
-
-
 def _hankel_g(L, eps=1e-6):
     k = torch.arange(0, 2 * L - 1, dtype=torch.float32)
     s = k + 2
@@ -428,7 +355,7 @@ class RLModelConfig:
     act_dim: int
     max_ep_len: int = 1024
     K_ctx: int = 20
-    d_model: int = 128
+    d_model: int = 72
     dropout: float = 0.1
     action_tanh: bool = True
 
@@ -463,11 +390,7 @@ class RLSequenceModel(nn.Module):
     def forward(self, states, actions, rtg, timesteps, mask, K_rt: Optional[int] = None):
         B, T = states.shape[0], states.shape[1]
         tokens = self._stack_tokens(states, actions, rtg, timesteps)
-        tok_mask = mask.unsqueeze(-1).expand(B, T, 3).reshape(B, 3 * T).to(tokens.dtype)
-        if self.backbone_kind == "transformer":
-            h = self.backbone(tokens, attn_mask=tok_mask)
-        else:
-            h = self.backbone(tokens, K_rt=K_rt)
+        h = self.backbone(tokens, K_rt=K_rt)
         h = h.reshape(B, T, 3, -1).permute(0, 2, 1, 3)
         return self.predict_action(h[:, 1])
 
@@ -498,12 +421,6 @@ class RLSequenceModel(nn.Module):
         return a[0, -1]
 
 
-def build_transformer_model(cfg: RLModelConfig, n_layer: int, n_head: int,
-                            activation: str = "relu") -> RLSequenceModel:
-    backbone = TransformerBackbone(cfg.d_model, n_layer, n_head, cfg.dropout, activation)
-    return RLSequenceModel(cfg, backbone, backbone_kind="transformer")
-
-
 def build_esssm_model(cfg: RLModelConfig, n_layer: int, K_max: int,
                      stoch_depth: float = 0.0, gate_bias_init: float = -2.0,
                      cache_dir: str = "./cache_filters") -> RLSequenceModel:
@@ -514,50 +431,6 @@ def build_esssm_model(cfg: RLModelConfig, n_layer: int, K_max: int,
         gate_bias_init=gate_bias_init, cache_dir=cache_dir,
     )
     return RLSequenceModel(cfg, backbone, backbone_kind="esssm")
-
-
-def _build_for_count(kind, d, n_layer, cfg, K_max, n_head, cache_dir):
-    new_cfg = RLModelConfig(**{**cfg.__dict__, "d_model": d})
-    if kind == "transformer":
-        m = build_transformer_model(new_cfg, n_layer=n_layer, n_head=n_head)
-    else:
-        m = build_esssm_model(new_cfg, n_layer=n_layer, K_max=K_max,
-                             cache_dir=cache_dir)
-    n = count_params(m)
-    del m
-    return n
-
-
-def match_dim_for_target(target_params, kind, n_layer, cfg, cache_dir,
-                         K_max=32, n_head=1, lo=16, hi=1024, div_by=4):
-    step = max(div_by, n_head)
-
-    def snap(d):
-        d = max(step, d - (d % step))
-        if kind == "esssm" and d % 2:
-            d += 1
-        return d
-
-    l, r = snap(lo), snap(hi)
-    while _build_for_count(kind, r, n_layer, cfg, K_max, n_head, cache_dir) < target_params and r < 4096:
-        r = snap(r * 2)
-    best_d = l
-    best_diff = abs(_build_for_count(kind, l, n_layer, cfg, K_max, n_head, cache_dir) - target_params)
-    while l <= r:
-        mid = snap((l + r) // 2)
-        n = _build_for_count(kind, mid, n_layer, cfg, K_max, n_head, cache_dir)
-        diff = abs(n - target_params)
-        if diff < best_diff:
-            best_diff = diff
-            best_d = mid
-        if n < target_params:
-            l = snap(mid + step)
-        else:
-            r = snap(mid - step)
-        if l == r:
-            break
-    final_n = _build_for_count(kind, best_d, n_layer, cfg, K_max, n_head, cache_dir)
-    return int(best_d), int(final_n)
 
 
 def build_compact_esssm_from_prefix(source: RLSequenceModel, K: int,
@@ -798,56 +671,10 @@ def _build_model_for_train(args, state_dim, act_dim, max_ep_len, cache_dir):
                        max_ep_len=max_ep_len, K_ctx=args.K_ctx,
                        d_model=args.embed_dim, dropout=args.dropout,
                        action_tanh=True)
-    if args.model == "dt" or (args.model == "transformer" and args.match_params_to is None):
-        model = build_transformer_model(cfg, n_layer=args.n_layer,
-                                       n_head=args.n_head, activation=args.activation)
-        info = {"kind": "transformer", "d": args.embed_dim, "n_layer": args.n_layer}
-    elif args.model == "transformer" and args.match_params_to == "esssm_K":
-        ref_cfg = RLModelConfig(state_dim=state_dim, act_dim=act_dim,
-                               max_ep_len=max_ep_len, K_ctx=args.K_ctx,
-                               d_model=args.ref_d_essm, dropout=args.dropout)
-        ref_m = build_esssm_model(ref_cfg, n_layer=args.ref_n_layer_essm,
-                                 K_max=args.match_K, cache_dir=cache_dir)
-        target = count_params(ref_m)
-        del ref_m
-        best_d, final_n = match_dim_for_target(
-            target, kind="transformer", n_layer=args.n_layer, cfg=cfg,
-            cache_dir=cache_dir, n_head=args.n_head, K_max=32)
-        cfg.d_model = best_d
-        model = build_transformer_model(cfg, n_layer=args.n_layer,
-                                       n_head=args.n_head, activation=args.activation)
-        info = {"kind": "transformer", "d": best_d, "n_layer": args.n_layer,
-                "match_K": args.match_K, "target_params": int(target),
-                "achieved_params": int(final_n)}
-    elif args.model == "esssm":
-        if args.match_params_to == "dt":
-            dt_cfg = RLModelConfig(state_dim=state_dim, act_dim=act_dim,
-                                   max_ep_len=max_ep_len, K_ctx=args.K_ctx,
-                                   d_model=DEFAULT_HYPER["embed_dim"], dropout=args.dropout)
-            dt_m = build_transformer_model(dt_cfg, n_layer=DEFAULT_HYPER["n_layer"],
-                                           n_head=DEFAULT_HYPER["n_head"],
-                                           activation=DEFAULT_HYPER["activation"])
-            target = count_params(dt_m)
-            del dt_m
-            best_d, final_n = match_dim_for_target(
-                target, kind="esssm", n_layer=args.n_layer, cfg=cfg,
-                cache_dir=cache_dir, K_max=args.K_max)
-            cfg.d_model = best_d
-            model = build_esssm_model(cfg, n_layer=args.n_layer, K_max=args.K_max,
-                                     stoch_depth=args.stoch_depth, cache_dir=cache_dir)
-            info = {"kind": "esssm", "d": best_d, "n_layer": args.n_layer,
-                    "K_max": args.K_max, "target_params": int(target),
-                    "achieved_params": int(final_n),
-                    "ref": {"d": DEFAULT_HYPER["embed_dim"],
-                            "n_layer": DEFAULT_HYPER["n_layer"]}}
-        else:
-            model = build_esssm_model(cfg, n_layer=args.n_layer, K_max=args.K_max,
-                                     stoch_depth=args.stoch_depth, cache_dir=cache_dir)
-            info = {"kind": "esssm", "d": args.embed_dim, "n_layer": args.n_layer,
-                    "K_max": args.K_max}
-    else:
-        raise ValueError(f"unsupported (model, match_params_to)="
-                         f"({args.model}, {args.match_params_to})")
+    model = build_esssm_model(cfg, n_layer=args.n_layer, K_max=args.K_max,
+                             stoch_depth=args.stoch_depth, cache_dir=cache_dir)
+    info = {"kind": "esssm", "d": args.embed_dim, "n_layer": args.n_layer,
+            "K_max": args.K_max}
     return model, cfg, info
 
 
@@ -949,16 +776,11 @@ def cmd_eval(args):
     cfg_model = ckpt["cfg_model"]
     env_name = ckpt["env"]
     cfg = RLModelConfig(**cfg_model)
-    if info["kind"] == "transformer":
-        a = ckpt["args"]
-        model = build_transformer_model(cfg,
-                                       n_layer=a.get("n_layer", info.get("n_layer", 3)),
-                                       n_head=a.get("n_head", 1),
-                                       activation=a.get("activation", "relu"))
-    else:
-        model = build_esssm_model(
-            cfg, n_layer=ckpt["args"].get("n_layer", info.get("n_layer", 3)),
-            K_max=info["K_max"], stoch_depth=0.0, cache_dir=args.cache_dir)
+    if info.get("kind") != "esssm":
+        raise ValueError("Only ES-SSM checkpoints are supported by this entry point.")
+    model = build_esssm_model(
+        cfg, n_layer=ckpt["args"].get("n_layer", info.get("n_layer", 3)),
+        K_max=info["K_max"], stoch_depth=0.0, cache_dir=args.cache_dir)
     model.load_state_dict(ckpt["model_state"])
     model.to(device)
     state_mean = np.asarray(ckpt["state_mean"], dtype=np.float32)
@@ -1032,21 +854,9 @@ def cmd_export_compact(args):
 
 
 def _model_args_for_tag(tag: str) -> List[str]:
-    table = {
-        "dt":          ["--model", "dt"],
-        "esssm_K32":   ["--model", "esssm", "--match-params-to", "dt", "--K-max", "32"],
-        "tf_matchK2":  ["--model", "transformer", "--match-params-to", "esssm_K",
-                        "--match-K", "2",  "--ref-d-essm", "72"],
-        "tf_matchK4":  ["--model", "transformer", "--match-params-to", "esssm_K",
-                        "--match-K", "4",  "--ref-d-essm", "72"],
-        "tf_matchK8":  ["--model", "transformer", "--match-params-to", "esssm_K",
-                        "--match-K", "8",  "--ref-d-essm", "72"],
-        "tf_matchK16": ["--model", "transformer", "--match-params-to", "esssm_K",
-                        "--match-K", "16", "--ref-d-essm", "72"],
-    }
-    if tag not in table:
-        raise ValueError(f"unknown tag {tag!r}; expected one of {list(table)}")
-    return table[tag]
+    if tag != "esssm_K32":
+        raise ValueError(f"unknown tag {tag!r}; expected esssm_K32")
+    return ["--model", "esssm", "--embed-dim", "72", "--K-max", "32"]
 
 
 def _run_dir(project_root: Path, tag: str, env: str, dataset: str, seed: int) -> Path:
@@ -1297,8 +1107,7 @@ def cmd_tabulate(args):
                 info = summary.get("info", {})
                 row = {
                     "tag": tag, "env": env, "dataset": dataset, "seed": seed,
-                    "family": "Transformer" if "transformer" in info.get("kind", "")
-                              else "ES-SSM",
+                    "family": "ES-SSM",
                     "K_deploy": _deploy_K_of(tag, info),
                     "d_model": info.get("d"),
                     "params": summary.get("n_params"),
@@ -1357,12 +1166,8 @@ def cmd_tabulate(args):
 
 
 def _deploy_K_of(tag: str, info: dict) -> Optional[int]:
-    if tag in ("dt", "tf_matchK32"):
-        return 32
     if tag == "esssm_K32":
-        return 32
-    if tag.startswith("tf_matchK"):
-        return int(tag.split("K")[-1])
+        return int(info.get("K_max", 32))
     return None
 
 
@@ -1444,21 +1249,13 @@ def _add_train_args(p: argparse.ArgumentParser):
     p.add_argument("--env", choices=list(ENV_CFG.keys()), required=True)
     p.add_argument("--dataset",
                   choices=["medium", "medium-replay", "medium-expert"], required=True)
-    p.add_argument("--model", choices=["dt", "transformer", "esssm"], required=True)
-    p.add_argument("--match-params-to", dest="match_params_to",
-                  choices=[None, "dt", "esssm_K"], default=None)
-    p.add_argument("--match-K", dest="match_K", type=int, default=32)
-    p.add_argument("--ref-d-essm", dest="ref_d_essm", type=int, default=72)
-    p.add_argument("--ref-n-layer-essm", dest="ref_n_layer_essm", type=int, default=3)
+    p.add_argument("--model", choices=["esssm"], default="esssm")
     p.add_argument("--K-max", dest="K_max", type=int, default=DEFAULT_HYPER["K_max"])
     p.add_argument("--K-ctx", dest="K_ctx", type=int, default=DEFAULT_HYPER["K_ctx"])
     p.add_argument("--embed-dim", dest="embed_dim", type=int,
                   default=DEFAULT_HYPER["embed_dim"])
     p.add_argument("--n-layer", dest="n_layer", type=int,
                   default=DEFAULT_HYPER["n_layer"])
-    p.add_argument("--n-head", dest="n_head", type=int,
-                  default=DEFAULT_HYPER["n_head"])
-    p.add_argument("--activation", default=DEFAULT_HYPER["activation"])
     p.add_argument("--dropout", type=float, default=DEFAULT_HYPER["dropout"])
     p.add_argument("--stoch-depth", dest="stoch_depth", type=float, default=0.0)
     p.add_argument("--batch-size", dest="batch_size", type=int,

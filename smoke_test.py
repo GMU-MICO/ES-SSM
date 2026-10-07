@@ -3,7 +3,6 @@ import contextlib
 import importlib.util
 import io
 import json
-import math
 import sys
 import tempfile
 from pathlib import Path
@@ -16,7 +15,7 @@ import runtime_utils as runtime
 
 
 ROOT = Path(__file__).resolve().parent
-MODULES = ["essm_LM", "transformer_pp_LM", "gla_LM"]
+MODULES = ["essm_LM"]
 
 
 def load_module(name, root=ROOT, tag="smoke"):
@@ -38,58 +37,17 @@ def configure(module, folder, device="cpu"):
         K_max=4, K_chunk=2, batch_size=1, grad_accum_steps=1,
         grad_ckpt=False, dropout=0., stoch_depth=0., num_workers=0,
         target_tokens=32, tokens_between_val=16, eval_batches=2, test_batches=2,
-        val_segments=3, test_segments=3, eval_k=[2, 4], chunk_size=4,
+        val_segments=3, test_segments=3, eval_k=[2, 4],
         budget_ks=[2, 4], budget_warmup_tokens=0, budget_full_every=2,
         filter_cache_dir=str(Path(folder) / "filters"),
         dataset_dir=str(Path(folder) / "dataset"), output_dir=str(Path(folder) / "output"),
     )
-    if hasattr(module, "SIZES"):
-        module.SIZES = [
-            dict(K=k, d_model=16, n_layers=1, n_heads=2, d_ffn=32, head_kv=8, head_v=8)
-            for k in [2, 4]
-        ]
 
 
 def model_for(module, name):
     if name == "essm_LM":
         return module.ESSSMLanguageModel(module.CFG["filter_cache_dir"])
-    if name == "transformer_pp_LM":
-        return module.TransformerLM(module.SIZES[0])
-    if name == "gla_LM":
-        return module.GLALM(module.SIZES[0])
     raise ValueError(f"Unknown model: {name}")
-
-
-def gla_recurrence(q, k, v, g):
-    state = torch.zeros(*q.shape[:2], q.shape[-1], v.shape[-1], device=q.device, dtype=q.dtype)
-    outputs = []
-    for t in range(q.shape[2]):
-        state = g[:, :, t].exp().unsqueeze(-1) * state + k[:, :, t, :, None] * v[:, :, t, None, :]
-        outputs.append(torch.einsum("bhd,bhdv->bhv", q[:, :, t], state))
-    return torch.stack(outputs, dim=2)
-
-
-def check_gla(device="cpu"):
-    module = load_module("gla_LM")
-    ones = torch.ones(1, 1, 2, 1, device=device)
-    gates = torch.full_like(ones, math.log(0.5))
-    expected = torch.tensor([1., 1.5], device=device)
-    for chunk in [1, 2]:
-        assert torch.allclose(module.gla_chunkwise(ones, ones, ones, gates, chunk).flatten(), expected)
-    torch.manual_seed(71)
-    values = [torch.randn(2, 2, 12, n, device=device, dtype=torch.float64) for n in [3, 3, 5]]
-    values.append(-torch.rand(2, 2, 12, 3, device=device, dtype=torch.float64))
-    for chunk in [1, 2, 3, 4, 6, 12]:
-        a = [x.clone().requires_grad_() for x in values]
-        b = [x.clone().requires_grad_() for x in values]
-        reference = gla_recurrence(*a)
-        actual = module.gla_chunkwise(*b, chunk)
-        torch.testing.assert_close(reference, actual, rtol=1e-10, atol=1e-10)
-        ga = torch.autograd.grad(reference.square().sum(), a)
-        gb = torch.autograd.grad(actual.square().sum(), b)
-        for x, y in zip(ga, gb):
-            torch.testing.assert_close(x, y, rtol=1e-9, atol=1e-9)
-    return {"two_step_oracle": [1.0, 1.5], "chunk_sizes": [1, 2, 3, 4, 6, 12], "gradients": "PASS"}
 
 
 def check_runtime(folder):
@@ -252,7 +210,7 @@ def main():
         parser.error("CUDA is not available.")
     torch.set_num_threads(1)
     with tempfile.TemporaryDirectory(prefix="esssm-smoke-") as folder:
-        report = {"runtime": check_runtime(folder), "gla": check_gla(args.device),
+        report = {"runtime": check_runtime(folder),
                   "models": check_models(folder, args.device), "lm_compact": check_lm_compact(folder),
                   "offline_rl": check_rl(folder), "training": check_training(folder, args.device),
                   "scope": "synthetic functional checks"}

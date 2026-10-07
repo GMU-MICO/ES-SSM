@@ -43,15 +43,13 @@ We are also pursuing an attention-free state-space model with strong retrieval, 
 ## Code
 
 This release contains the main language-modeling and D4RL experiments from
-the September 22, 2026 submission package. It includes ES-SSM, Transformer++
-and GLA language-model drivers, compact model export, and shared data utilities.
+the September 22, 2026 submission package. It includes the ES-SSM
+language-model driver, compact model evaluation, offline RL export, and shared data utilities.
 The existing PG19 notebook remains available as a separate example.
 
 | File | Purpose |
 | --- | --- |
 | `essm_LM.py` | ES-SSM training and evaluation across compute budgets |
-| `transformer_pp_LM.py` | Independently trained Transformer++ baselines |
-| `gla_LM.py` | Independently trained GLA baselines |
 | `d4rl_mujoco_RL.py` | Offline RL training, compact export and evaluation |
 | `runtime_utils.py` | Hankel filters, dataset caches and checkpoint writes |
 | `download_slimpajama.py` | Download local parquet data with a pinned revision |
@@ -104,13 +102,6 @@ python essm_LM.py --inference-only \
   --filter-cache-dir ./cache/filter
 ```
 
-For Transformer++ or GLA, use the same training command with
-`transformer_pp_LM.py` or `gla_LM.py`, a separate output directory, and omit
-`--filter-cache-dir`. Each baseline trains the independent configurations
-listed in its `SIZES` table. Add `--inference-only` to evaluate its saved
-checkpoints. GLA uses the corrected recurrence from the supplied package;
-its driver rejects old checkpoints without the `gla_recurrence_v2` marker.
-
 ### Compact model evaluation
 
 The ES-SSM inference command constructs a physically smaller model for each
@@ -124,8 +115,8 @@ python -m pip install -r requirements-rl.txt
 bash reproduce_DL.sh
 ```
 
-This runs the D4RL MuJoCo grid, exports five independent ES-SSM budgets and
-evaluates them alongside Decision Transformer baselines. For a single
+This runs the ES-SSM D4RL MuJoCo grid, exports five independent budgets and
+evaluates the full and compact models. For a single
 experiment and the individual commands, see [the offline RL guide](docs/offline_rl.md).
 Use trusted RL checkpoints: the archived format includes NumPy metadata.
 
