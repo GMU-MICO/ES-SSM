@@ -42,7 +42,100 @@ We are also pursuing an attention-free state-space model with strong retrieval, 
 
 ## Code
 
-This repository contains the code accompanying this paper.
+This release contains the main language-modeling and D4RL experiments from
+the September 22, 2026 submission package. It includes ES-SSM, Transformer++
+and GLA language-model drivers, compact model export, and shared data utilities.
+The existing PG19 notebook remains available as a separate example.
+
+| File | Purpose |
+| --- | --- |
+| `essm_LM.py` | ES-SSM training and evaluation across compute budgets |
+| `transformer_pp_LM.py` | Independently trained Transformer++ baselines |
+| `gla_LM.py` | Independently trained GLA baselines |
+| `d4rl_mujoco_RL.py` | Offline RL training, compact export and evaluation |
+| `runtime_utils.py` | Hankel filters, dataset caches and checkpoint writes |
+| `download_slimpajama.py` | Download local parquet data with a pinned revision |
+| `smoke_test.py` | Small functional checks using synthetic data |
+
+### Install and check
+
+Use Python 3.10 or later and a PyTorch build appropriate for your hardware.
+The full language-model experiments target CUDA; the functional checks run on CPU.
+
+```bash
+python -m pip install -r requirements.txt
+python smoke_test.py
+```
+
+The check covers forward and backward passes, activation checkpointing, short
+training runs, inference, causal behavior, and independent compact checkpoint
+reloads. It uses temporary synthetic data and downloads no dataset.
+
+### Language modeling
+
+Prepare a local SlimPajama parquet mirror:
+
+```bash
+python download_slimpajama.py --out-dir ./datasets/slimpajama \
+  --train-files 250 --val-files 30 --test-files 30
+```
+
+This requests the complete shard layout used by the package and is a large
+download. The downloader records the dataset revision and file hashes in
+`download_manifest.json`; pass that revision with `--revision` to reuse it.
+Without the shard-count flags, it downloads only one shard per split.
+
+```bash
+torchrun --nproc_per_node=1 essm_LM.py \
+  --data-dir ./datasets/slimpajama --output-dir ./runs/essm \
+  --filter-cache-dir ./cache/filter
+```
+
+The archived ES-SSM defaults are the large model and a 30B **byte-token**
+training target. The smoke test is the small check; this command runs the main
+experiment. Architecture and training settings are in `CFG`.
+
+Evaluate a trained checkpoint:
+
+```bash
+python essm_LM.py --inference-only \
+  --checkpoint ./runs/essm/checkpoints/best.pt \
+  --data-dir ./datasets/slimpajama --output-dir ./runs/essm \
+  --filter-cache-dir ./cache/filter
+```
+
+For Transformer++ or GLA, use the same training command with
+`transformer_pp_LM.py` or `gla_LM.py`, a separate output directory, and omit
+`--filter-cache-dir`. Each baseline trains the independent configurations
+listed in its `SIZES` table. Add `--inference-only` to evaluate its saved
+checkpoints. GLA uses the corrected recurrence from the supplied package;
+its driver rejects old checkpoints without the `gla_recurrence_v2` marker.
+
+### Compact model evaluation
+
+The ES-SSM inference command constructs a physically smaller model for each
+configured budget using `build_compact`. The D4RL entry point also saves
+independent compact checkpoints with its existing `export-compact` command.
+
+### Offline reinforcement learning
+
+```bash
+python -m pip install -r requirements-rl.txt
+bash reproduce_DL.sh
+```
+
+This runs the D4RL MuJoCo grid, exports five independent ES-SSM budgets and
+evaluates them alongside Decision Transformer baselines. For a single
+experiment and the individual commands, see [the offline RL guide](docs/offline_rl.md).
+Use trusted RL checkpoints: the archived format includes NumPy metadata.
+
+### Release scope
+
+Budget and precision ablations, supplementary diagnostics, scheduler files,
+datasets and trained weights are omitted. LRA and Speech Commands training
+code was not present in the supplied package. The checks validate the
+included implementation; they do not constitute a rerun of the paper's
+full training results. The original model and training defaults are retained.
 
 ## Citation
 

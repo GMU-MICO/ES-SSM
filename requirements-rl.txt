@@ -1,0 +1,4 @@
+-r requirements.txt
+h5py>=3.10
+gymnasium>=1.0
+mujoco>=3.0
