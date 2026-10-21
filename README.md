@@ -45,7 +45,6 @@ We are also pursuing an attention-free state-space model with strong retrieval, 
 This release contains the main language-modeling and D4RL experiments from
 the September 22, 2026 submission package. It includes the ES-SSM
 language-model driver, compact model evaluation, offline RL export, and shared data utilities.
-The existing PG19 notebook remains available as a separate example.
 
 | File | Purpose |
 | --- | --- |
