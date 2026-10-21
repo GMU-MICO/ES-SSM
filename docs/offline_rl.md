@@ -37,7 +37,7 @@ Run the commands below from the repository root. Install the dependencies with
 Python ≥ 3.10 with:
 
 ```
-torch >= 2.1
+torch >= 2.4
 numpy
 h5py
 gymnasium >= 1.0
