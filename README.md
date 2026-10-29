@@ -10,7 +10,9 @@ NeurIPS 2026, Main Track (Poster).
 
 ## Overview
 
-ES-SSM trains a spectral state space model once and exports compact models for different compute budgets. It combines fixed Hankel spectral channels with learned channel projections, input-adaptive channel-wise gates, and budget dropout. For a runtime budget `K`, direct prefix truncation retains the first `K` channels and their associated parameters. Each exported model can run independently, without budget-specific retraining.
+ES-SSM trains a spectral state space model once and exports compact models for different compute budgets. Its fixed Hankel spectral basis provides a naturally ordered channel axis. Keeping the first `K` channels sets the approximation resolution of the SSM sequence operator, so the spectral-channel count directly controls model capacity.
+
+Training uses learned channel projections, input-adaptive channel-wise gates, and budget dropout to optimize the same retained prefixes used at inference. This encourages early channels to remain predictive at small budgets, while later channels provide refinements at larger budgets. At deployment, direct prefix truncation removes channels beyond `K` and their associated parameters to produce an independently deployable compact model. No budget-specific retraining, channel search, or reordering is required.
 
 ![ES-SSM architecture](ES-SSM-figure-1.png)
 
@@ -99,6 +101,8 @@ This runs the D4RL MuJoCo experiments, exports compact checkpoints at `K = 2, 4,
 ## Follow-up work
 
 [Elastic Selective Spectral Hybrids for Train-Once, Export-Many Budgeted Inference (ESSH)](https://arxiv.org/abs/2609.32486) extends this direction to hybrid language models. It combines selective spectral mixers with input-dependent decay and write/read gates, sliding-window attention, and joint training of spectral-channel count and feed-forward width.
+
+With a 1.53B model on B300, fused recurrent decoding takes 1.37 ms/token at batch size 1 after a 2K context. In the paper's parameter-matched CUDA-graph benchmark, this is 3.03× faster than Transformer++ and 2.14–2.80× faster than the tested Mamba-2 and Mamba-3 implementations ([Appendix R, Table 59](https://arxiv.org/html/2609.32486v1)).
 
 ## Citation
 
