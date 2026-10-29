@@ -1,86 +1,62 @@
 # ES-SSM
 
-**Elastic Spectral State Space Models for Train-Once Budgeted Inference**
+Elastic Spectral State Space Models for Train-Once Budgeted Inference
 
-[Paper: arXiv:2601.22488](https://arxiv.org/abs/2601.22488) | [Code](#code) | [Hybrid follow-up](https://arxiv.org/abs/2609.32486) | [Citation](#citation)
+Dachuan Song, Junyu Yin, Zechen Hu, Xuan Wang
 
-Modern sequence models are typically trained at a fixed computational capacity. However, real-world applications require AI deployment across heterogeneous computational platforms, from high-throughput cloud clusters to compute-limited endpoints and power-constrained edge devices.
+NeurIPS 2026, Main Track (Poster).
 
-ES-SSM studies elasticity from an operator-approximation perspective: it controls the approximation resolution of the SSM sequence operator, rather than only shrinking architectural components.
+[Paper](https://arxiv.org/abs/2601.22488) · [Hugging Face](https://huggingface.co/Dachuan99/ES-SSM) · [Usage](#usage) · [ESSH follow-up](https://arxiv.org/abs/2609.32486) · [Citation](#citation)
 
-## Method
+## Overview
 
-ES-SSM is a train-once, export-many sequence modeling framework that gains elasticity through spectral approximation of the SSM sequence operator. Fixed Hankel spectral channels define an operator-level approximation resolution. Input-adaptive channel-wise gates and budget dropout train the same spectral prefixes that compact models use at inference time.
+ES-SSM trains a spectral state space model once and exports compact models for different compute budgets. It combines fixed Hankel spectral channels with learned channel projections, input-adaptive channel-wise gates, and budget dropout. For a runtime budget `K`, direct prefix truncation retains the first `K` channels and their associated parameters. Each exported model can run independently, without budget-specific retraining.
 
-At deployment, direct prefix truncation keeps channels 1 through K and removes the tail channels. One full-capacity checkpoint can therefore produce smaller models across runtime budgets, without budget-specific retraining, channel search, or reordering.
+![ES-SSM architecture](ES-SSM-figure-1.png)
 
-![Figure 1: ES-SSM architecture overview](ES-SSM-figure-1.png)
+Figure 1. The ES-SSM residual block and spectral sublayer. The retained channels determine the spectral approximation resolution used by the compact model.
 
-**Figure 1.** ES-SSM architecture overview. Fixed Hankel spectral channels and a tokenwise Gate MLP produce input-adaptive, channel-wise budgeted gates. Thus, one full-capacity training can be truncated into compact models at multiple runtime budgets.
+## Experiments
 
-## Results
+The paper evaluates ES-SSM on byte-level language modeling, Long Range Arena, Speech Commands V2, and D4RL offline reinforcement learning.
 
-Evaluations cover byte-level language modeling, Long Range Arena, Speech Commands V2, D4RL offline reinforcement learning, and a byte-level generality check.
+![SlimPajama results](ES-SSM-figure-3.png)
 
-On SlimPajama (1.3B family, 30B tokens), ES-SSM produces a smooth, usable budget curve from one full-capacity training run; even the smallest prefixes remain outside the collapse zone. Ten exported parameter budgets span roughly 330M to 1.3B.
+Figure 3. SlimPajama results for the 1.3B-parameter family trained on 30B byte-tokens. Test bits per byte (BPB) is plotted against spectral budget and inference throughput (sequence length 2048, batch 1, one B200 GPU). Dashed curves are non-elastic references trained separately at each capacity.
 
-![Figure 3: SlimPajama scaling results](ES-SSM-figure-3.png)
+![D4RL results](ES-SSM-figure-4.png)
 
-**Figure 3.** SlimPajama main-table visualization for the 1.3B-family, 30B-token experiment. [A] Test BPB vs runtime budget K. [B] Test BPB vs throughput at sequence length 2048, batch 1, on one B200 GPU. Dashed non-elastic baselines are independently trained oracles, not intended for direct comparison with ES-SSM.
+Figure 4. D4RL normalized returns and total training time across nine datasets and three seeds on RTX 3090. ES-SSM uses one training run per dataset and seed to obtain five compact budgets; the Transformer reference is trained separately at each budget.
 
-On D4RL (9 datasets x 3 seeds, RTX 3090), ES-SSM obtains all five budgets from one run and reduces total training wall-clock from 107.84 h to 23.99 h (77.8%). Returns match the independently trained Transformer at K=2, 4, and 16, and improve at K=8 and 32.
+## Usage
 
-![Figure 4: D4RL quality and training-cost comparison](ES-SSM-figure-4.png)
+This repository includes the ES-SSM language-modeling and D4RL experiments. Datasets and trained checkpoints are not included.
 
-**Figure 4.** [A] Average normalized return vs runtime budget. [B] Total training wall-clock on the full D4RL suite (9 datasets x 3 seeds, RTX 3090).
+### Installation
 
-## Future work
-
-For hybrid architectures, see our follow-up paper, [Elastic Selective Spectral Hybrids for Train-Once, Export-Many Budgeted Inference](https://arxiv.org/abs/2609.32486).
-
-We are also pursuing an attention-free state-space model with strong retrieval, recall, and general sequence-modeling capabilities.
-
-## Code
-
-This release contains the main language-modeling and D4RL experiments from
-the September 22, 2026 submission package. It includes the ES-SSM
-language-model driver, compact model evaluation, offline RL export, and shared data utilities.
-
-| File | Purpose |
-| --- | --- |
-| `essm_LM.py` | ES-SSM training and evaluation across compute budgets |
-| `d4rl_mujoco_RL.py` | Offline RL training, compact export and evaluation |
-| `runtime_utils.py` | Hankel filters, dataset caches and checkpoint writes |
-| `download_slimpajama.py` | Download local parquet data with a pinned revision |
-| `smoke_test.py` | Small functional checks using synthetic data |
-
-### Install and check
-
-Use Python 3.10 or later and a PyTorch build appropriate for your hardware.
-The full language-model experiments target CUDA; the functional checks run on CPU.
+Use Python 3.10 or later and PyTorch 2.4 or later. Install a PyTorch build suitable for your hardware; the full language-modeling experiment uses CUDA.
 
 ```bash
+git clone https://github.com/GMU-MICO/ES-SSM.git
+cd ES-SSM
 python -m pip install -r requirements.txt
 python smoke_test.py
 ```
 
-The check covers forward and backward passes, activation checkpointing, short
-training runs, inference, causal behavior, and independent compact checkpoint
-reloads. It uses temporary synthetic data and downloads no dataset.
+The smoke test runs small CPU checks with synthetic data, including training, inference, causality, and compact-model equivalence.
 
 ### Language modeling
 
-Prepare a local SlimPajama parquet mirror:
+Download the SlimPajama parquet files used by the scripts:
 
 ```bash
 python download_slimpajama.py --out-dir ./datasets/slimpajama \
   --train-files 250 --val-files 30 --test-files 30
 ```
 
-This requests the complete shard layout used by the package and is a large
-download. The downloader records the dataset revision and file hashes in
-`download_manifest.json`; pass that revision with `--revision` to reuse it.
-Without the shard-count flags, it downloads only one shard per split.
+These counts download the full mirror. Omit the three shard-count flags to download one shard per split. The downloader records the resolved dataset revision and file hashes in `download_manifest.json`; use `--revision` to select a specific revision.
+
+Train ES-SSM:
 
 ```bash
 torchrun --nproc_per_node=1 essm_LM.py \
@@ -88,11 +64,9 @@ torchrun --nproc_per_node=1 essm_LM.py \
   --filter-cache-dir ./cache/filter
 ```
 
-The archived ES-SSM defaults are the large model and a 30B **byte-token**
-training target. The smoke test is the small check; this command runs the main
-experiment. Architecture and training settings are in `CFG`.
+The default `CFG` in `essm_LM.py` runs the 1.3B-family experiment with a training target of 30B byte-tokens. Model dimensions, training settings, and evaluation budgets are configured there.
 
-Evaluate a trained checkpoint:
+Evaluate a checkpoint across the configured budgets:
 
 ```bash
 python essm_LM.py --inference-only \
@@ -101,11 +75,7 @@ python essm_LM.py --inference-only \
   --filter-cache-dir ./cache/filter
 ```
 
-### Compact model evaluation
-
-The ES-SSM inference command constructs a physically smaller model for each
-configured budget using `build_compact`. The D4RL entry point also saves
-independent compact checkpoints with its existing `export-compact` command.
+For each budget in `CFG["eval_k"]`, evaluation uses `build_compact` to construct a smaller model containing only the retained channels and parameters.
 
 ### Offline reinforcement learning
 
@@ -114,22 +84,25 @@ python -m pip install -r requirements-rl.txt
 bash reproduce_DL.sh
 ```
 
-This runs the ES-SSM D4RL MuJoCo grid, exports five independent budgets and
-evaluates the full and compact models. For a single
-experiment and the individual commands, see [the offline RL guide](docs/offline_rl.md).
-Use trusted RL checkpoints: the archived format includes NumPy metadata.
+This runs the D4RL MuJoCo experiments, exports compact checkpoints at `K = 2, 4, 8, 16, 32`, and evaluates them. See [the offline RL guide](docs/offline_rl.md) for individual commands and settings.
 
-### Release scope
+### Files
 
-Budget and precision ablations, supplementary diagnostics, scheduler files,
-datasets and trained weights are omitted. LRA and Speech Commands training
-code was not present in the supplied package. The checks validate the
-included implementation; they do not constitute a rerun of the paper's
-full training results. The original model and training defaults are retained.
+| File | Contents |
+| --- | --- |
+| `essm_LM.py` | Language-model training and compact-model evaluation |
+| `d4rl_mujoco_RL.py` | D4RL training, checkpoint export, and evaluation |
+| `runtime_utils.py` | Hankel filters, data caches, and checkpoint utilities |
+| `download_slimpajama.py` | SlimPajama download and revision manifest |
+| `smoke_test.py` | Functional checks with small models and synthetic data |
+
+## Follow-up work
+
+[Elastic Selective Spectral Hybrids for Train-Once, Export-Many Budgeted Inference (ESSH)](https://arxiv.org/abs/2609.32486) extends this direction to hybrid language models. It combines selective spectral mixers with input-dependent decay and write/read gates, sliding-window attention, and joint training of spectral-channel count and feed-forward width.
 
 ## Citation
 
-If you use this work, please cite:
+BibTeX entries for ES-SSM and the ESSH follow-up:
 
 ```bibtex
 @misc{song2026elasticspectralstatespace,
@@ -152,3 +125,7 @@ If you use this work, please cite:
   url={https://arxiv.org/abs/2609.32486},
 }
 ```
+
+## License
+
+The code is released under the [Apache License 2.0](LICENSE).
