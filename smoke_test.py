@@ -3,9 +3,11 @@ import contextlib
 import importlib.util
 import io
 import json
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -173,6 +175,33 @@ def check_rl(folder):
     return {"compact_equivalence": "PASS", "finite_forward_backward": "PASS", "causality": "PASS"}
 
 
+def check_export_status(folder):
+    import d4rl_mujoco_RL as module
+
+    args = argparse.Namespace(
+        seeds="42", project_root=str(Path(folder) / "export_status"),
+        cache_dir=str(Path(folder) / "export_filters"), Ks="2,4", redo=True,
+    )
+    run = subprocess.run
+    for returncode in (0, 7):
+        def child(command, **kwargs):
+            assert command[3] == "export-compact"
+            return run([sys.executable, "-c", f"raise SystemExit({returncode})"], **kwargs)
+
+        with patch.object(module, "DATASETS", [("hopper", "medium", "unused")]), \
+                patch.object(Path, "exists", return_value=True), \
+                patch.object(Path, "mkdir"), \
+                patch.object(module.subprocess, "run", side_effect=child), \
+                contextlib.redirect_stdout(io.StringIO()):
+            try:
+                module.cmd_sweep_export(args)
+            except subprocess.CalledProcessError as exc:
+                assert returncode != 0 and exc.returncode == returncode
+            else:
+                assert returncode == 0, "Failed compact export did not stop the sweep."
+    return {"successful_export": "PASS", "failed_export_stops_sweep": "PASS"}
+
+
 def check_training(folder, device="cpu"):
     data = Path(folder) / "training_data" / "data"
     data.mkdir(parents=True)
@@ -212,7 +241,8 @@ def main():
     with tempfile.TemporaryDirectory(prefix="esssm-smoke-") as folder:
         report = {"runtime": check_runtime(folder),
                   "models": check_models(folder, args.device), "lm_compact": check_lm_compact(folder),
-                  "offline_rl": check_rl(folder), "training": check_training(folder, args.device),
+                  "offline_rl": check_rl(folder), "export_status": check_export_status(folder),
+                  "training": check_training(folder, args.device),
                   "scope": "synthetic functional checks"}
     print(json.dumps({"status": "PASS", **report}, indent=2))
 

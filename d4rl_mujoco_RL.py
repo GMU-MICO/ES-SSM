@@ -234,23 +234,6 @@ class TrajectoryBatcher:
         }
 
 
-def _hankel_g(L, eps=1e-6):
-    k = torch.arange(0, 2 * L - 1, dtype=torch.float32)
-    s = k + 2
-    a = 2 / (s ** 3 - s + eps)
-    return torch.cat([a[L - 1:], torch.zeros(1), a[: L - 1]])
-
-
-@torch.no_grad()
-def _hmv(g_f, X):
-    L, p = X.shape
-    n = 2 * L
-    Xp = torch.zeros((p, n))
-    Xp[:, :L] = torch.flip(X, [0]).T
-    return torch.fft.irfft(torch.fft.rfft(Xp, dim=-1) * g_f.unsqueeze(0),
-                           n=n, dim=-1)[:, :L].T
-
-
 @torch.no_grad()
 def hankel_topk(L: int, K: int, cache_dir: str,
                 iters: int = 60, oversample: int = 16, tol: float = 1e-6):
@@ -1086,7 +1069,7 @@ def cmd_sweep_export(args):
                "--ckpt", str(ckpt), "--out-dir", str(out_dir),
                "--Ks", Ks, "--cache-dir", str(args.cache_dir)]
         print(f"  export {env}-{dataset} seed={seed}")
-        subprocess.run(cmd, check=False)
+        subprocess.run(cmd, check=True)
 
 
 def cmd_tabulate(args):

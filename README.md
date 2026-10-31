@@ -10,13 +10,13 @@ NeurIPS 2026, Main Track (Poster).
 
 ## Overview
 
-ES-SSM trains a spectral state space model once and exports compact models for different compute budgets. Its fixed Hankel spectral basis provides a naturally ordered channel axis. Keeping the first `K` channels sets the approximation resolution of the SSM sequence operator, so the spectral-channel count directly controls model capacity.
+ES-SSM trains once and exports compact models for different compute budgets. Fixed Hankel spectral channels provide an ordered approximation of the sequence operator; the runtime budget `K` selects a prefix of these channels.
 
-Training uses learned channel projections, input-adaptive channel-wise gates, and budget dropout to optimize the same retained prefixes used at inference. This encourages early channels to remain predictive at small budgets, while later channels provide refinements at larger budgets. At deployment, direct prefix truncation removes channels beyond `K` and their associated parameters to produce an independently deployable compact model. No budget-specific retraining, channel search, or reordering is required.
+Input-adaptive gates and budget dropout train the prefixes used at inference. Export keeps the first `K` filters, channel projections and gate-output rows, together with the shared parameters. Each compact model runs without further training.
 
 ![ES-SSM architecture](ES-SSM-figure-1.png)
 
-Figure 1. The ES-SSM residual block and spectral sublayer. The retained channels determine the spectral approximation resolution used by the compact model.
+Figure 1. ES-SSM residual block and spectral sublayer.
 
 ## Experiments
 
@@ -28,11 +28,11 @@ Figure 3. SlimPajama results for the 1.3B-parameter family trained on 30B byte-t
 
 ![D4RL results](ES-SSM-figure-4.png)
 
-Figure 4. D4RL normalized returns and total training time across nine datasets and three seeds on RTX 3090. ES-SSM uses one training run per dataset and seed to obtain five compact budgets; the Transformer reference is trained separately at each budget.
+Figure 4. D4RL normalized returns and total training time across nine datasets and three seeds on RTX 3090. ES-SSM trains once per dataset and seed and exports five budgets; the Transformer reference trains at each budget.
 
 ## Usage
 
-This repository includes the ES-SSM language-modeling and D4RL experiments. Datasets and trained checkpoints are not included.
+The code covers ES-SSM training and evaluation on byte-level SlimPajama and D4RL MuJoCo.
 
 ### Installation
 
@@ -45,7 +45,7 @@ python -m pip install -r requirements.txt
 python smoke_test.py
 ```
 
-The smoke test runs small CPU checks with synthetic data, including training, inference, causality, and compact-model equivalence.
+`smoke_test.py` checks training, inference, causality, compact-model equivalence and export error handling on CPU with synthetic inputs.
 
 ### Language modeling
 
@@ -56,7 +56,7 @@ python download_slimpajama.py --out-dir ./datasets/slimpajama \
   --train-files 250 --val-files 30 --test-files 30
 ```
 
-These counts download the full mirror. Omit the three shard-count flags to download one shard per split. The downloader records the resolved dataset revision and file hashes in `download_manifest.json`; use `--revision` to select a specific revision.
+Omit the shard-count flags to download one shard per split; use `--num-workers 0` in the training command for a single training shard. `download_manifest.json` records the dataset revision and file hashes; `--revision` selects a specific revision.
 
 Train ES-SSM:
 
@@ -66,7 +66,7 @@ torchrun --nproc_per_node=1 essm_LM.py \
   --filter-cache-dir ./cache/filter
 ```
 
-The default `CFG` in `essm_LM.py` runs the 1.3B-family experiment with a training target of 30B byte-tokens. Model dimensions, training settings, and evaluation budgets are configured there.
+`CFG` in `essm_LM.py` sets the model, training schedule and evaluation budgets. The defaults are the 1.3B-family configuration and 30B byte-tokens.
 
 Evaluate a checkpoint across the configured budgets:
 
@@ -77,7 +77,7 @@ python essm_LM.py --inference-only \
   --filter-cache-dir ./cache/filter
 ```
 
-For each budget in `CFG["eval_k"]`, evaluation uses `build_compact` to construct a smaller model containing only the retained channels and parameters.
+Evaluation calls `build_compact` for each budget in `CFG["eval_k"]`.
 
 ### Offline reinforcement learning
 
@@ -86,7 +86,7 @@ python -m pip install -r requirements-rl.txt
 bash reproduce_DL.sh
 ```
 
-This runs the D4RL MuJoCo experiments, exports compact checkpoints at `K = 2, 4, 8, 16, 32`, and evaluates them. See [the offline RL guide](docs/offline_rl.md) for individual commands and settings.
+This trains, exports and evaluates compact checkpoints at `K = 2, 4, 8, 16, 32`. Individual commands and settings are in the [D4RL guide](docs/offline_rl.md).
 
 ### Files
 

@@ -1,53 +1,20 @@
-# D4RL MuJoCo Code for ES-SSM
+# D4RL MuJoCo
 
-The offline RL entry point runs the D4RL MuJoCo experiment grid:
-- 9 datasets (HalfCheetah / Hopper / Walker2d × medium / medium-replay / medium-expert)
-- 3 seeds per cell
-- ES-SSM at full capacity `K_max=32` (`esssm_K32`), with embedding dimension 72
-  and three layers, followed by compact models at `K ∈ {2, 4, 8, 16, 32}`.
+The default sweep covers nine datasets: HalfCheetah, Hopper and Walker2d, each in the medium, medium-replay and medium-expert settings. It uses three seeds per dataset.
 
-After training, each ES-SSM(K_max=32) cell is sliced into five independent
-compact checkpoints at K ∈ {2, 4, 8, 16, 32}. Compact inference loads each
-file in isolation; its on-disk size, runtime memory, and forward-pass latency
-reflect the deployed K and not the source K_max.
-
-## File layout
-
-```
-d4rl_mujoco_RL.py
-runtime_utils.py
-reproduce_DL.sh
-requirements-rl.txt
-docs/offline_rl.md
-```
-
-The script keeps three separate working roots, all configurable on the CLI:
-
-```
---hdf5-dir   ./data
---cache-dir  ./cache_filters
---project-root ./project
-```
+Each run trains ES-SSM at `K_max=32` with embedding dimension 72 and three layers, then exports separate checkpoints at `K = 2, 4, 8, 16, 32`.
 
 ## Environment
 
-Run the commands below from the repository root. Install the dependencies with
-`python -m pip install -r requirements-rl.txt`.
+Use Python 3.10 or later and run the commands from the repository root:
 
-Python ≥ 3.10 with:
-
-```
-torch >= 2.4
-numpy
-h5py
-gymnasium >= 1.0
-mujoco >= 3.0
+```bash
+python -m pip install -r requirements-rl.txt
 ```
 
-Atari is not used. CUDA is recommended for the full sweep but the script also
-runs end-to-end on CPU (slowly).
+The script uses CUDA when available and otherwise runs on CPU. Dependency versions are specified in `requirements-rl.txt` and `requirements.txt`.
 
-## Reproducing the headline grid
+## Full sweep
 
 ```bash
 python d4rl_mujoco_RL.py download-data \
@@ -71,7 +38,9 @@ python d4rl_mujoco_RL.py tabulate \
 
 `reproduce_DL.sh` runs these five commands in sequence with the same defaults.
 
-## Running a single cell (debugging)
+The data, filter cache and run directories are set by `--hdf5-dir`, `--cache-dir` and `--project-root`.
+
+## Single run
 
 ```bash
 python d4rl_mujoco_RL.py train \
@@ -91,7 +60,7 @@ python d4rl_mujoco_RL.py eval \
     --num-eval-episodes 100 --cache-dir ./cache_filters
 ```
 
-## What gets written
+## Outputs
 
 For each training cell `runs/<tag>/<env>-<dataset>[/seed<N>]/`:
 
@@ -112,9 +81,7 @@ results/per_env_mean.csv
 results/by_K.csv
 ```
 
-## Hyperparameters
-
-Archived training settings used by this entry point:
+## Default settings
 
 | Setting           | Value          |
 |-------------------|----------------|
@@ -129,14 +96,8 @@ Archived training settings used by this entry point:
 | Eval episodes     | 100 (final)    |
 | Eval target return| Higher of (3600, 1800) for Hopper, (12000, 6000) for HalfCheetah, (5000, 2500) for Walker2d |
 
-ES-SSM uses budget-dropout: after 10% of training at full K_max=32, K_rt is
-sampled log-uniformly from {2, 3, 4, 5, 6, 8, 12, 16, 24, 32}; every 8 steps
-the full K_max is anchored. This is what makes prefix-truncated compact
-checkpoints reliable at every K.
+Budget dropout uses the full budget for the first 10% of training steps. Afterwards, it samples a log-scale target and selects the nearest budget in `{2, 3, 4, 5, 6, 8, 12, 16, 24, 32}`, with a full-budget anchor every eight steps.
 
 ## Compact deployment
 
-`build_compact_esssm_from_prefix` constructs a fresh `RLSequenceModel` whose
-ES-SSM has `K_max = K`, copies the K-prefix of `sigma`, `phi_f_ri`, `M`, and the
-selector output rows from the source checkpoint, and re-saves the model as
-an independent `.pt`. Loading the compact file does not require the source.
+`build_compact_esssm_from_prefix` creates an `RLSequenceModel` with `K_max = K`, copies the first `K` entries of the channel-indexed tensors (`sigma`, `phi_f_ri`, `M` and selector output rows), and copies the shared parameters. Each exported `.pt` file contains the complete compact model.
