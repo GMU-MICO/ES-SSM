@@ -102,7 +102,7 @@ This trains, exports and evaluates compact checkpoints at `K = 2, 4, 8, 16, 32`.
 
 [Elastic Selective Spectral Hybrids for Train-Once, Export-Many Budgeted Inference (ESSH)](https://arxiv.org/abs/2609.32486) extends this direction to hybrid language models. It combines selective spectral mixers with input-dependent decay and write/read gates, sliding-window attention, and joint training of spectral-channel count and feed-forward width.
 
-With a 1.53B model on B300, fused recurrent decoding takes 1.37 ms/token at batch size 1 after a 2K context. In the paper's parameter-matched CUDA-graph benchmark, this is 3.03× faster than Transformer++ and 2.14–2.80× faster than the tested Mamba-2 and Mamba-3 implementations ([Appendix R, Table 59](https://arxiv.org/html/2609.32486v1)).
+At 1.53B parameters on an NVIDIA A100, fused decoding matches the speed of Mamba-2. At matched parameter counts and under the same compilation policy for all models, ESSH achieves a 1.1–1.6× speedup over Mamba-3 and a 1.1–4.6× speedup over Transformer++.
 
 ## Citation
 
